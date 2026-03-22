@@ -69,19 +69,34 @@ class Editor:
         end_x = int(cx + radius * math.cos(end_a))
         end_y = int(cy - radius * math.sin(end_a))
         
+        if mode == "arc_left":
+            rect1 = (start_x, start_y - TILE_SIZE//2, TILE_SIZE//2, TILE_SIZE)
+            rect2 = (end_x, end_y - TILE_SIZE//2, TILE_SIZE//2, TILE_SIZE)
+        elif mode == "arc_right":
+            rect1 = (start_x - TILE_SIZE//2, start_y - TILE_SIZE//2, TILE_SIZE//2, TILE_SIZE)
+            rect2 = (end_x - TILE_SIZE//2, end_y - TILE_SIZE//2, TILE_SIZE//2, TILE_SIZE)
+        elif mode == "arc_top":
+            rect1 = (start_x - TILE_SIZE//2, start_y, TILE_SIZE, TILE_SIZE//2)
+            rect2 = (end_x - TILE_SIZE//2, end_y, TILE_SIZE, TILE_SIZE//2)
+        else: # arc_bottom
+            rect1 = (start_x - TILE_SIZE//2, start_y - TILE_SIZE//2, TILE_SIZE, TILE_SIZE//2)
+            rect2 = (end_x - TILE_SIZE//2, end_y - TILE_SIZE//2, TILE_SIZE, TILE_SIZE//2)
+
         if alpha < 255:
             temp = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            pygame.draw.rect(temp, (*color_c1[:3], 255), rect1)
+            pygame.draw.rect(temp, (*color_c2[:3], 255), rect2)
             for i in range(steps + 1):
                 t = i / steps
                 a = start_a + (end_a - start_a) * t
                 x = cx + radius * math.cos(a)
                 y = cy - radius * math.sin(a)
                 pygame.draw.circle(temp, (*color_c1[:3], 255), (int(x), int(y)), TILE_SIZE // 2)
-            pygame.draw.rect(temp, (*color_c1[:3], 255), (start_x - TILE_SIZE//2, start_y - TILE_SIZE//2, TILE_SIZE, TILE_SIZE))
-            pygame.draw.rect(temp, (*color_c2[:3], 255), (end_x - TILE_SIZE//2, end_y - TILE_SIZE//2, TILE_SIZE, TILE_SIZE))
             temp.set_alpha(alpha)
             surf.blit(temp, (0, 0))
         else:
+            pygame.draw.rect(surf, color_c1, rect1)
+            pygame.draw.rect(surf, color_c2, rect2)
             for i in range(steps + 1):
                 t = i / steps
                 a = start_a + (end_a - start_a) * t
@@ -98,8 +113,6 @@ class Editor:
                     g = color_cmid[1]*(1-tr) + color_c2[1]*tr
                     b = color_cmid[2]*(1-tr) + color_c2[2]*tr
                 pygame.draw.circle(surf, (int(r), int(g), int(b)), (int(x), int(y)), TILE_SIZE // 2)
-            pygame.draw.rect(surf, color_c1, (start_x - TILE_SIZE//2, start_y - TILE_SIZE//2, TILE_SIZE, TILE_SIZE))
-            pygame.draw.rect(surf, color_c2, (end_x - TILE_SIZE//2, end_y - TILE_SIZE//2, TILE_SIZE, TILE_SIZE))
 
     def auto_color(self):
         self.canvas_api.fill(API_COLORS["Grass"])
