@@ -27,14 +27,22 @@ class Editor:
         self.canvas_api.fill(API_COLORS["Grass"])
         
         self.font = pygame.font.SysFont("Arial", 14)
+        self.big_font = pygame.font.SysFont("Arial", 42, bold=True)
         self.tool = "brush" 
         self.track_dir = "Right"
         self.brush_tiles = set()
         self.arcs = []
         self.arc_pts = []
-        self.filename = "map_api"
+        self.filename_map = "map_api"
+        self.filename_scenario = "scenario"
         self.typing_filename = False
         self.last_painted_tile = None
+
+        self.mode = "MAP"
+        self.scenario_stages = []
+        self.scenario_state = "IDLE"
+        self.drag_start = None
+        self.current_rect = None
 
     def draw_arc_logic(self, surf, pts, mode, color_c1, color_c2=None, color_cmid=None, alpha=255):
         if len(pts) < 2: return
@@ -200,6 +208,33 @@ class Editor:
                 
             self.draw_arc_logic(self.canvas_api, pts, mode, c1, c2, c_mid)
 
+        # Draw Direction arrow
+        arrow_len = 40
+        arr_col = (40, 40, 40)
+        
+        if self.track_dir == "Right":
+            arr_cx = 12 + TILE_SIZE // 2
+            arr_cy = 12 + TILE_SIZE // 2
+            pygame.draw.line(self.canvas_api, arr_col, (arr_cx - arrow_len//2, arr_cy), (arr_cx + arrow_len//2, arr_cy), 5)
+            pygame.draw.polygon(self.canvas_api, arr_col, [
+                (arr_cx + arrow_len//2 + 5, arr_cy),
+                (arr_cx + arrow_len//2 - 10, arr_cy - 10),
+                (arr_cx + arrow_len//2 - 10, arr_cy + 10)
+            ])
+        else:
+            # Bottom right tile completely visible
+            max_x_idx = (WIDTH - 12 - TILE_SIZE) // TILE_SIZE
+            max_y_idx = (HEIGHT - 12 - TILE_SIZE) // TILE_SIZE
+            arr_cx = 12 + max_x_idx * TILE_SIZE + TILE_SIZE // 2
+            arr_cy = 12 + max_y_idx * TILE_SIZE + TILE_SIZE // 2
+            
+            pygame.draw.line(self.canvas_api, arr_col, (arr_cx + arrow_len//2, arr_cy), (arr_cx - arrow_len//2, arr_cy), 5)
+            pygame.draw.polygon(self.canvas_api, arr_col, [
+                (arr_cx - arrow_len//2 - 5, arr_cy),
+                (arr_cx - arrow_len//2 + 10, arr_cy - 10),
+                (arr_cx - arrow_len//2 + 10, arr_cy + 10)
+            ])
+
     def run(self):
         while True:
             mx, my = pygame.mouse.get_pos()
@@ -226,31 +261,32 @@ class Editor:
                 
             mouse_btns = pygame.mouse.get_pressed()
             if on_map and not self.typing_filename:
-                if mouse_btns[0] and self.tool == "brush":
-                    if (gx, gy) != self.last_painted_tile:
-                        self.brush_tiles.add((gx, gy))
-                        self.last_painted_tile = (gx, gy)
-                        self.auto_color()
-                elif mouse_btns[2]:
-                    if (gx, gy) != self.last_painted_tile:
-                        self.last_painted_tile = (gx, gy)
-                        changed = False
-                        if (gx, gy) in self.brush_tiles:
-                            self.brush_tiles.discard((gx, gy))
-                            changed = True
-                            
-                        new_arcs = []
-                        for arc in self.arcs:
-                            _, pts = arc
-                            if (pts[0][0] == cx and pts[0][1] == cy) or (pts[1][0] == cx and pts[1][1] == cy):
-                                changed = True
-                                continue
-                            new_arcs.append(arc)
-                        if changed:
-                            self.arcs = new_arcs
+                if self.mode == "MAP":
+                    if mouse_btns[0] and self.tool == "brush":
+                        if (gx, gy) != self.last_painted_tile:
+                            self.brush_tiles.add((gx, gy))
+                            self.last_painted_tile = (gx, gy)
                             self.auto_color()
-                elif not mouse_btns[0] and not mouse_btns[2]:
-                    self.last_painted_tile = None
+                    elif mouse_btns[2]:
+                        if (gx, gy) != self.last_painted_tile:
+                            self.last_painted_tile = (gx, gy)
+                            changed = False
+                            if (gx, gy) in self.brush_tiles:
+                                self.brush_tiles.discard((gx, gy))
+                                changed = True
+                                
+                            new_arcs = []
+                            for arc in self.arcs:
+                                _, pts = arc
+                                if (pts[0][0] == cx and pts[0][1] == cy) or (pts[1][0] == cx and pts[1][1] == cy):
+                                    changed = True
+                                    continue
+                                new_arcs.append(arc)
+                            if changed:
+                                self.arcs = new_arcs
+                                self.auto_color()
+                    elif not mouse_btns[0] and not mouse_btns[2]:
+                        self.last_painted_tile = None
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT: pygame.quit(); sys.exit()
@@ -264,40 +300,89 @@ class Editor:
                         if event.key == pygame.K_RETURN:
                             self.typing_filename = False
                         elif event.key == pygame.K_BACKSPACE:
-                            self.filename = self.filename[:-1]
+                            if self.mode == "MAP": self.filename_map = self.filename_map[:-1]
+                            else: self.filename_scenario = self.filename_scenario[:-1]
                         else:
-                            self.filename += event.unicode
+                            if self.mode == "MAP": self.filename_map += event.unicode
+                            else: self.filename_scenario += event.unicode
 
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     if on_map:
-                        if event.button == 1 and self.tool != "brush" and not self.typing_filename:
-                            self.arc_pts.append((cx, cy))
-                            if len(self.arc_pts) == 2:
-                                self.arcs.append((self.tool, self.arc_pts.copy()))
-                                self.arc_pts = []
-                            self.auto_color()
+                        if self.mode == "MAP":
+                            if event.button == 1 and self.tool != "brush" and not self.typing_filename:
+                                self.arc_pts.append((cx, cy))
+                                if len(self.arc_pts) == 2:
+                                    self.arcs.append((self.tool, self.arc_pts.copy()))
+                                    self.arc_pts = []
+                                self.auto_color()
+                        elif self.mode == "SCENARIO":
+                            if event.button == 1 and not self.typing_filename:
+                                if self.scenario_state == "IDLE":
+                                    if len(self.scenario_stages) < 8:
+                                        self.scenario_state = "DRAWING_START"
+                                        self.drag_start = (gx, gy)
+                                        self.current_rect = (gx, gy, TILE_SIZE, TILE_SIZE)
+                                elif self.scenario_state == "WAITING_TARGET":
+                                    stage = {"start": self.current_rect, "target": (canvas_mx, canvas_my)}
+                                    self.scenario_stages.append(stage)
+                                    self.scenario_state = "IDLE"
+                                    self.current_rect = None
+                                    self.drag_start = None
                     else:
                         self.handle_menu(mx, my)
 
-            self.render(gx, gy, on_map, cx, cy, current_scale, drawn_w, drawn_h)
+                if event.type == pygame.MOUSEMOTION:
+                    if self.mode == "SCENARIO" and self.scenario_state == "DRAWING_START":
+                        end_x = int((canvas_mx - 12) // TILE_SIZE) * TILE_SIZE + 12
+                        end_y = int((canvas_my - 12) // TILE_SIZE) * TILE_SIZE + 12
+                        rx = min(self.drag_start[0], end_x)
+                        ry = min(self.drag_start[1], end_y)
+                        rw = max(self.drag_start[0], end_x) - rx + TILE_SIZE
+                        rh = max(self.drag_start[1], end_y) - ry + TILE_SIZE
+                        self.current_rect = (rx, ry, rw, rh)
+
+                if event.type == pygame.MOUSEBUTTONUP:
+                    if event.button == 1 and self.mode == "SCENARIO" and self.scenario_state == "DRAWING_START":
+                        if self.current_rect and self.current_rect[2] > 5 and self.current_rect[3] > 5:
+                            self.scenario_state = "WAITING_TARGET"
+                        else:
+                            self.scenario_state = "IDLE"
+                            self.drag_start = None
+                            self.current_rect = None
+
+            self.render(gx, gy, on_map, canvas_mx, canvas_my, cx, cy, current_scale, drawn_w, drawn_h)
 
     def handle_menu(self, mx, my):
         x_off = self.win_width - MENU_WIDTH + 20
-        if pygame.Rect(x_off, 20, 210, 40).collidepoint(mx, my): 
-            self.track_dir = "Left" if self.track_dir == "Right" else "Right"
-            self.auto_color()
-            
-        tools = ["brush", "arc_left", "arc_right", "arc_top", "arc_bottom"]
-        for i, tool_id in enumerate(tools):
-            if pygame.Rect(x_off, 95 + i * 30, 210, 25).collidepoint(mx, my):
-                self.tool = tool_id
-                self.arc_pts = []
+        
+        if pygame.Rect(x_off, 20, 210, 35).collidepoint(mx, my):
+            self.mode = "SCENARIO" if self.mode == "MAP" else "MAP"
+            self.scenario_state = "IDLE"
+            self.current_rect = None
+            self.drag_start = None
+
+        if self.mode == "MAP":
+            if pygame.Rect(x_off, 60, 210, 35).collidepoint(mx, my): 
+                self.track_dir = "Left" if self.track_dir == "Right" else "Right"
+                self.auto_color()
                 
-        if pygame.Rect(x_off, 260, 210, 35).collidepoint(mx, my):
-            self.brush_tiles.clear()
-            self.arcs.clear()
-            self.arc_pts.clear()
-            self.auto_color()
+            tools = ["brush", "arc_left", "arc_right", "arc_top", "arc_bottom"]
+            for i, tool_id in enumerate(tools):
+                if pygame.Rect(x_off, 125 + i * 30, 210, 25).collidepoint(mx, my):
+                    self.tool = tool_id
+                    self.arc_pts = []
+                    
+            if pygame.Rect(x_off, 290, 210, 35).collidepoint(mx, my):
+                self.brush_tiles.clear()
+                self.arcs.clear()
+                self.arc_pts.clear()
+                self.auto_color()
+        else:
+            if pygame.Rect(x_off, 130, 210, 35).collidepoint(mx, my):
+                self.scenario_stages.clear()
+                self.scenario_state = "IDLE"
+                self.current_rect = None
+                self.drag_start = None
             
         save_btn_y = max(470, self.win_height - 60)
         filename_y = save_btn_y - 45
@@ -308,23 +393,65 @@ class Editor:
             self.typing_filename = False
             
         if pygame.Rect(x_off, save_btn_y, 210, 40).collidepoint(mx, my):
-            pygame.image.save(self.canvas_api, f"{self.filename}.png")
-            print(f"Saved {self.filename}.png")
+            if self.mode == "MAP":
+                pygame.image.save(self.canvas_api, f"{self.filename_map}.png")
+                print(f"Saved {self.filename_map}.png")
+            else:
+                self.save_scenario_csv()
 
-    def render(self, gx, gy, on_map, cx, cy, current_scale, drawn_w, drawn_h):
+    def save_scenario_csv(self):
+        try:
+            with open(f"{self.filename_scenario}.csv", "w") as f:
+                f.write("stage_id;sequence_id;start_x;start_y;start_width;start_height;target_x;target_y\n")
+                for i, stage in enumerate(self.scenario_stages):
+                    sx, sy, sw, sh = stage["start"]
+                    tx, ty = stage["target"]
+                    mx_val = sx / 22.0
+                    my_val = (HEIGHT - sy) / 22.0
+                    mw_val = sw / 22.0
+                    mh_val = sh / 22.0
+                    mtx_val = tx / 22.0
+                    mty_val = (HEIGHT - ty) / 22.0
+                    f.write(f"{i+1};1;{mx_val:.3f};{my_val:.3f};{mw_val:.3f};{mh_val:.3f};{mtx_val:.3f};{mty_val:.3f}\n")
+            print(f"Saved {self.filename_scenario}.csv")
+        except Exception as e:
+            print(f"Failed to save CSV: {e}")
+
+    def render(self, gx, gy, on_map, canvas_mx, canvas_my, cx, cy, current_scale, drawn_w, drawn_h):
         self.screen.fill((30, 30, 30))
         display_surface = self.canvas_api.copy()
         
-        if on_map:
-            darken = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
-            darken.fill((0, 0, 0, 60))
-            display_surface.blit(darken, (gx, gy))
+        if self.mode == "MAP":
+            if on_map:
+                darken = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+                darken.fill((0, 0, 0, 60))
+                display_surface.blit(darken, (gx, gy))
 
-            if self.tool != "brush":
-                pygame.draw.circle(display_surface, (255, 0, 0), (cx, cy), 8)
-                if len(self.arc_pts) == 1:
-                    # Real-time preview rendering
-                    self.draw_arc_logic(display_surface, [self.arc_pts[0], (cx, cy)], self.tool, (0, 0, 0), alpha=100)
+                if self.tool != "brush":
+                    pygame.draw.circle(display_surface, (255, 0, 0), (cx, cy), 8)
+                    if len(self.arc_pts) == 1:
+                        self.draw_arc_logic(display_surface, [self.arc_pts[0], (cx, cy)], self.tool, (0, 0, 0), alpha=100)
+        elif self.mode == "SCENARIO":
+            scene_overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            for i, stage in enumerate(self.scenario_stages):
+                rx, ry, rw, rh = stage["start"]
+                tx, ty = stage["target"]
+                pygame.draw.rect(scene_overlay, (0, 0, 255, 255), (rx, ry, rw, rh), 4)
+                pygame.draw.circle(scene_overlay, (255, 0, 0, 200), (int(tx), int(ty)), 8)
+                txt = self.big_font.render(str(i+1), True, (255, 255, 255))
+                txt_rect = txt.get_rect(center=(int(rx + rw/2), int(ry + rh/2)))
+                bg_rect = txt_rect.inflate(16, 8)
+                pygame.draw.rect(scene_overlay, (0, 0, 255, 200), bg_rect, border_radius=4)
+                scene_overlay.blit(txt, txt_rect)
+
+            if self.current_rect:
+                rx, ry, rw, rh = self.current_rect
+                pygame.draw.rect(scene_overlay, (0, 255, 0, 255), (rx, ry, rw, rh), 4)
+                
+                if self.scenario_state == "WAITING_TARGET" and on_map:
+                    pygame.draw.circle(scene_overlay, (255, 0, 0, 200), (int(canvas_mx), int(canvas_my)), 6)
+            
+            display_surface.blit(scene_overlay, (0, 0))
 
         view = pygame.transform.scale(display_surface, (drawn_w, drawn_h))
         
@@ -363,45 +490,58 @@ class Editor:
             pygame.draw.rect(self.screen, bg_color, rect)
             self.screen.blit(self.font.render(txt, True, (255, 255, 255)), (rect[0]+10, rect[1]+10))
 
-        dir_rect = pygame.Rect(x, 20, 210, 40)
-        btn(f"DIRECTION: {self.track_dir}", dir_rect, True, dir_rect.collidepoint(mx, my))
-        
-        self.screen.blit(self.font.render("SELECT TILE:", True, (200, 200, 200)), (x, 70))
-        
-        tools = [
-            ("Road", "brush"),
-            ("Arc Left", "arc_left"),
-            ("Arc Right", "arc_right"),
-            ("Arc Top", "arc_top"),
-            ("Arc Bottom", "arc_bottom")
-        ]
-        
-        for i, (name, tool_id) in enumerate(tools):
-            rect = pygame.Rect(x, 95 + i * 30, 210, 25)
-            hover = rect.collidepoint(mx, my)
-            active = self.tool == tool_id
-            
-            cb_color = (0, 255, 0) if active else ((200, 200, 200) if hover else (150, 150, 150))
-            pygame.draw.rect(self.screen, cb_color, (x, 95 + i * 30 + 3, 16, 16), 0 if active else 2)
-            
-            txt_color = (255, 255, 255) if hover or active else (200, 200, 200)
-            self.screen.blit(self.font.render(name, True, txt_color), (x + 25, 95 + i * 30 + 3))
+        mode_rect = pygame.Rect(x, 20, 210, 35)
+        btn(f"MODE: {self.mode}", mode_rect, True, mode_rect.collidepoint(mx, my))
 
-        cb_rect = pygame.Rect(x, 260, 210, 35)
-        btn("CLEAR BOARD", cb_rect, False, cb_rect.collidepoint(mx, my))
-        
-        ly = 320
-        self.screen.blit(self.font.render("COLOR LEGEND:", True, (200, 200, 200)), (x, ly))
-        legend_items = [
-            ("Up", API_COLORS["Up"]),
-            ("Down", API_COLORS["Down"]),
-            ("Right", API_COLORS["Right"]),
-            ("Left", API_COLORS["Left"]),
-            ("Intersection", API_COLORS["Corner"])
-        ]
-        for i, (name, color) in enumerate(legend_items):
-            pygame.draw.rect(self.screen, color, (x, ly + 25 + i*25, 20, 20))
-            self.screen.blit(self.font.render(name, True, (255, 255, 255)), (x + 30, ly + 27 + i*25))
+        if self.mode == "MAP":
+            dir_rect = pygame.Rect(x, 60, 210, 35)
+            btn(f"DIRECTION: {self.track_dir}", dir_rect, True, dir_rect.collidepoint(mx, my))
+            
+            self.screen.blit(self.font.render("SELECT TILE:", True, (200, 200, 200)), (x, 100))
+            
+            tools = [
+                ("Road", "brush"), ("Arc Left", "arc_left"), ("Arc Right", "arc_right"),
+                ("Arc Top", "arc_top"), ("Arc Bottom", "arc_bottom")
+            ]
+            for i, (name, tool_id) in enumerate(tools):
+                rect = pygame.Rect(x, 125 + i * 30, 210, 25)
+                hover = rect.collidepoint(mx, my)
+                active = self.tool == tool_id
+                cb_color = (0, 255, 0) if active else ((200, 200, 200) if hover else (150, 150, 150))
+                pygame.draw.rect(self.screen, cb_color, (x, 125 + i * 30 + 3, 16, 16), 0 if active else 2)
+                txt_color = (255, 255, 255) if hover or active else (200, 200, 200)
+                self.screen.blit(self.font.render(name, True, txt_color), (x + 25, 125 + i * 30 + 3))
+
+            cb_rect = pygame.Rect(x, 290, 210, 35)
+            btn("CLEAR BOARD", cb_rect, False, cb_rect.collidepoint(mx, my))
+            
+            ly = 340
+            self.screen.blit(self.font.render("COLOR LEGEND:", True, (200, 200, 200)), (x, ly))
+            legend_items = [
+                ("Up", API_COLORS["Up"]), ("Down", API_COLORS["Down"]),
+                ("Right", API_COLORS["Right"]), ("Left", API_COLORS["Left"]),
+                ("Intersection", API_COLORS["Corner"])
+            ]
+            for i, (name, color) in enumerate(legend_items):
+                pygame.draw.rect(self.screen, color, (x, ly + 25 + i*25, 20, 20))
+                self.screen.blit(self.font.render(name, True, (255, 255, 255)), (x + 30, ly + 27 + i*25))
+
+        elif self.mode == "SCENARIO":
+            self.screen.blit(self.font.render(f"STAGES (Max 8): {len(self.scenario_stages)}/8", True, (200, 200, 200)), (x, 70))
+            if self.scenario_state == "IDLE":
+                status = "Drag to create area"
+            elif self.scenario_state == "DRAWING_START":
+                status = "Release to finish area"
+            else:
+                status = "Click to set target point"
+            self.screen.blit(self.font.render(f"P: {status}", True, (255, 255, 50)), (x, 100))
+            
+            cb_rect = pygame.Rect(x, 130, 210, 35)
+            btn("CLEAR SCENARIOS", cb_rect, False, cb_rect.collidepoint(mx, my))
+            
+            info_y = 180
+            self.screen.blit(self.font.render("CSV Unit: Meters (scale=22)", True, (150, 150, 150)), (x, info_y))
+            self.screen.blit(self.font.render("Y-Axis: Turtlesim (Inverted)", True, (150, 150, 150)), (x, info_y+20))
 
         save_btn_y = max(470, self.win_height - 60)
         filename_y = save_btn_y - 45
@@ -412,11 +552,12 @@ class Editor:
         if self.typing_filename: bg_col = (80, 80, 80)
         pygame.draw.rect(self.screen, bg_col, (x, filename_y, 210, 35))
         pygame.draw.rect(self.screen, (150, 150, 150), (x, filename_y, 210, 35), 1)
-        name_surf = self.font.render(f"{self.filename}.png" + ("|" if self.typing_filename else ""), True, (255, 255, 255))
+        current_name = self.filename_map if self.mode == "MAP" else self.filename_scenario
+        name_surf = self.font.render(f"{current_name}" + ("|" if self.typing_filename else ""), True, (255, 255, 255))
         self.screen.blit(name_surf, (x + 10, filename_y + 10))
 
         save_rect = pygame.Rect(x, save_btn_y, 210, 40)
-        btn("SAVE IMAGE", save_rect, False, save_rect.collidepoint(mx, my))
+        btn("SAVE IMAGE" if self.mode == "MAP" else "SAVE SCENARIO", save_rect, False, save_rect.collidepoint(mx, my))
 
 if __name__ == "__main__":
     Editor().run()
