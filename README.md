@@ -51,3 +51,12 @@ Execute the engine natively from the terminal:
 ```bash
 python3 map_generator.py
 ```
+
+
+## Screenshots
+### Scenario editor
+<img width="1713" height="808" alt="Screenshot 2026-03-23 at 00 01 29" src="https://github.com/user-attachments/assets/2e85dc38-1d05-4e49-b02c-c5080c439f0a" />
+
+### Generated image
+<img width="1920" height="1080" alt="map_a" src="https://github.com/user-attachments/assets/89037a12-13b3-4418-bd31-b6b12ed3820e" />
+
