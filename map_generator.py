@@ -10,10 +10,10 @@ SCALE = 0.5
 
 API_COLORS = {
     "Grass":  (200, 255, 200),
-    "Up":     (200, 255, 250),
-    "Down":   (200, 255, 150),
-    "Right":  (250, 255, 200),
-    "Left":   (150, 255, 200),
+    "Up":     (200, 250, 250),
+    "Down":   (200, 250, 150),
+    "Right":  (250, 250, 200),
+    "Left":   (150, 250, 200),
     "Corner": (200, 0, 200)
 }
 
@@ -124,21 +124,37 @@ class Editor:
 
     def auto_color(self):
         self.canvas_api.fill(API_COLORS["Grass"])
-        
-        all_x = [t[0] for t in self.brush_tiles]
-        all_y = [t[1] for t in self.brush_tiles]
-        for (mode, pts) in self.arcs:
-            all_x.extend([pts[0][0], pts[1][0]])
-            all_y.extend([pts[0][1], pts[1][1]])
-            
-        mid_x = (min(all_x) + max(all_x)) // 2 if all_x else WIDTH // 2
-        mid_y = (min(all_y) + max(all_y)) // 2 if all_y else HEIGHT // 2
-        
-        def is_road(x, y):
-            if (x - 33, y - 33) in self.brush_tiles: return True
-            for (mode, pts) in self.arcs:
-                if pts[0] == (x, y) or pts[1] == (x, y): return True
+
+        tile_set = set(self.brush_tiles)
+
+        def is_road(cx, cy):
+            if (cx - TILE_SIZE//2, cy - TILE_SIZE//2) in tile_set: return True
+            for (_, pts) in self.arcs:
+                if pts[0] == (cx, cy) or pts[1] == (cx, cy): return True
             return False
+
+        # Separate tiles into horizontal and vertical groups for better centroid
+        h_tiles = []  # tiles with E or W brush neighbors (majority horizontal)
+        v_tiles = []  # tiles with N or S brush neighbors (majority vertical)
+        for (x, y) in self.brush_tiles:
+            cx, cy = x + TILE_SIZE//2, y + TILE_SIZE//2
+            has_h = (x + TILE_SIZE, y) in tile_set or (x - TILE_SIZE, y) in tile_set
+            has_v = (x, y + TILE_SIZE) in tile_set or (x, y - TILE_SIZE) in tile_set
+            if has_h and not has_v:
+                h_tiles.append((x, y))
+            elif has_v and not has_h:
+                v_tiles.append((x, y))
+
+        # Centroid of horizontal tiles → used to split top(Right)/bottom(Left)
+        # Centroid of vertical tiles → used to split left(Up)/right(Down)
+        h_mid_y = (sum(t[1] for t in h_tiles) / len(h_tiles)) if h_tiles else HEIGHT // 2
+        v_mid_x = (sum(t[0] for t in v_tiles) / len(v_tiles)) if v_tiles else WIDTH // 2
+
+        # Fallback: global centroid
+        all_x = [t[0] for t in self.brush_tiles] + [p[i][0] for _,p in self.arcs for i in range(2)]
+        all_y = [t[1] for t in self.brush_tiles] + [p[i][1] for _,p in self.arcs for i in range(2)]
+        mid_x = int(sum(all_x)/len(all_x)) if all_x else WIDTH//2
+        mid_y = int(sum(all_y)/len(all_y)) if all_y else HEIGHT//2
 
         for (x, y) in self.brush_tiles:
             cx, cy = x + TILE_SIZE//2, y + TILE_SIZE//2
@@ -146,94 +162,54 @@ class Editor:
             S = is_road(cx, cy + TILE_SIZE)
             W = is_road(cx - TILE_SIZE, cy)
             E = is_road(cx + TILE_SIZE, cy)
-            
-            is_vertical = (N or S) and not (W or E)
-            is_horizontal = (W or E) and not (N or S)
             neighbors_count = N + S + W + E
-            
+            is_vertical   = (N or S) and not (W or E)
+            is_horizontal = (W or E) and not (N or S)
+
             if self.track_dir == "Right":
-                v_color = API_COLORS["Up"] if x < mid_x else API_COLORS["Down"]
-                h_color = API_COLORS["Right"] if y < mid_y else API_COLORS["Left"]
+                v_color = API_COLORS["Up"]   if x < v_mid_x else API_COLORS["Down"]
+                h_color = API_COLORS["Right"] if y < h_mid_y else API_COLORS["Left"]
             else:
-                v_color = API_COLORS["Down"] if x < mid_x else API_COLORS["Up"]
-                h_color = API_COLORS["Left"] if y < mid_y else API_COLORS["Right"]
-            
+                v_color = API_COLORS["Down"]  if x < v_mid_x else API_COLORS["Up"]
+                h_color = API_COLORS["Left"]  if y < h_mid_y else API_COLORS["Right"]
+
             if is_vertical:
                 pygame.draw.rect(self.canvas_api, v_color, (x, y, TILE_SIZE, TILE_SIZE))
             elif is_horizontal:
                 pygame.draw.rect(self.canvas_api, h_color, (x, y, TILE_SIZE, TILE_SIZE))
             elif neighbors_count == 2 and not (N and S) and not (W and E):
+                # L-corner brush tile: gradient blend between horizontal and vertical colors
                 r1, g1, b1 = v_color[:3]
                 r2, g2, b2 = h_color[:3]
-                
-                # Manual radial gradient interpolation to precisely match edge colors
                 for dy in range(TILE_SIZE):
                     for dx in range(TILE_SIZE):
-                        if N and W:
-                            v_val, h_val = dy, dx
-                        elif N and E:
-                            v_val, h_val = dy, TILE_SIZE - 1 - dx
-                        elif S and W:
-                            v_val, h_val = TILE_SIZE - 1 - dy, dx
-                        else:  # S and E
-                            v_val, h_val = TILE_SIZE - 1 - dy, TILE_SIZE - 1 - dx
-                            
-                        if v_val == 0 and h_val == 0:
-                            t = 0.5
-                        else:
-                            t = math.atan2(v_val, h_val) / (math.pi / 2)
-                            
-                        # Safe boundaries
-                        t = max(0.0, min(1.0, t))
-                        
-                        r = int(r1*(1-t) + r2*t)
-                        g = int(g1*(1-t) + g2*t)
-                        b = int(b1*(1-t) + b2*t)
-                        self.canvas_api.set_at((x + dx, y + dy), (r, g, b))
+                        if N and W:     v_val, h_val = dy, dx
+                        elif N and E:   v_val, h_val = dy, TILE_SIZE - 1 - dx
+                        elif S and W:   v_val, h_val = TILE_SIZE - 1 - dy, dx
+                        else:           v_val, h_val = TILE_SIZE - 1 - dy, TILE_SIZE - 1 - dx
+                        t = 0.5 if v_val == 0 and h_val == 0 else max(0.0, min(1.0, math.atan2(v_val, h_val) / (math.pi / 2)))
+                        self.canvas_api.set_at((x + dx, y + dy), (int(r1*(1-t)+r2*t), int(g1*(1-t)+g2*t), int(b1*(1-t)+b2*t)))
             else:
                 pygame.draw.rect(self.canvas_api, API_COLORS["Corner"], (x, y, TILE_SIZE, TILE_SIZE))
 
         # Draw arcs as gradient shapes with a middle state
         for (mode, pts) in self.arcs:
             if self.track_dir == "Right":
-                if mode == "arc_left": c1, c_mid, c2 = API_COLORS["Right"], API_COLORS["Up"], API_COLORS["Left"]
-                elif mode == "arc_right": c1, c_mid, c2 = API_COLORS["Left"], API_COLORS["Down"], API_COLORS["Right"]
-                elif mode == "arc_top": c1, c_mid, c2 = API_COLORS["Down"], API_COLORS["Right"], API_COLORS["Up"]
-                else: c1, c_mid, c2 = API_COLORS["Up"], API_COLORS["Left"], API_COLORS["Down"]
+                if mode == "arc_left":   c1, c_mid, c2 = API_COLORS["Right"], API_COLORS["Up"],   API_COLORS["Left"]
+                elif mode == "arc_right": c1, c_mid, c2 = API_COLORS["Left"],  API_COLORS["Down"], API_COLORS["Right"]
+                elif mode == "arc_top":   c1, c_mid, c2 = API_COLORS["Down"],  API_COLORS["Right"], API_COLORS["Up"]
+                else:                     c1, c_mid, c2 = API_COLORS["Up"],    API_COLORS["Left"],  API_COLORS["Down"]
             else:
-                if mode == "arc_left": c1, c_mid, c2 = API_COLORS["Left"], API_COLORS["Down"], API_COLORS["Right"]
-                elif mode == "arc_right": c1, c_mid, c2 = API_COLORS["Right"], API_COLORS["Up"], API_COLORS["Left"]
-                elif mode == "arc_top": c1, c_mid, c2 = API_COLORS["Up"], API_COLORS["Left"], API_COLORS["Down"]
-                else: c1, c_mid, c2 = API_COLORS["Down"], API_COLORS["Right"], API_COLORS["Up"]
-                
+                if mode == "arc_left":   c1, c_mid, c2 = API_COLORS["Left"],  API_COLORS["Down"], API_COLORS["Right"]
+                elif mode == "arc_right": c1, c_mid, c2 = API_COLORS["Right"], API_COLORS["Up"],   API_COLORS["Left"]
+                elif mode == "arc_top":   c1, c_mid, c2 = API_COLORS["Up"],    API_COLORS["Left"],  API_COLORS["Down"]
+                else:                     c1, c_mid, c2 = API_COLORS["Down"],  API_COLORS["Right"], API_COLORS["Up"]
+
             self.draw_arc_logic(self.canvas_api, pts, mode, c1, c2, c_mid)
 
-        # Draw Direction arrow
-        arrow_len = 40
-        arr_col = (40, 40, 40)
-        
-        if self.track_dir == "Right":
-            arr_cx = 12 + TILE_SIZE // 2
-            arr_cy = 12 + TILE_SIZE // 2
-            pygame.draw.line(self.canvas_api, arr_col, (arr_cx - arrow_len//2, arr_cy), (arr_cx + arrow_len//2, arr_cy), 5)
-            pygame.draw.polygon(self.canvas_api, arr_col, [
-                (arr_cx + arrow_len//2 + 5, arr_cy),
-                (arr_cx + arrow_len//2 - 10, arr_cy - 10),
-                (arr_cx + arrow_len//2 - 10, arr_cy + 10)
-            ])
-        else:
-            # Bottom right tile completely visible
-            max_x_idx = (WIDTH - 12 - TILE_SIZE) // TILE_SIZE
-            max_y_idx = (HEIGHT - 12 - TILE_SIZE) // TILE_SIZE
-            arr_cx = 12 + max_x_idx * TILE_SIZE + TILE_SIZE // 2
-            arr_cy = 12 + max_y_idx * TILE_SIZE + TILE_SIZE // 2
-            
-            pygame.draw.line(self.canvas_api, arr_col, (arr_cx + arrow_len//2, arr_cy), (arr_cx - arrow_len//2, arr_cy), 5)
-            pygame.draw.polygon(self.canvas_api, arr_col, [
-                (arr_cx - arrow_len//2 - 5, arr_cy),
-                (arr_cx - arrow_len//2 + 10, arr_cy - 10),
-                (arr_cx - arrow_len//2 + 10, arr_cy + 10)
-            ])
+        # Removed Direction arrow as requested
+
+
 
     def run(self):
         while True:
@@ -402,17 +378,17 @@ class Editor:
     def save_scenario_csv(self):
         try:
             with open(f"{self.filename_scenario}.csv", "w") as f:
-                f.write("stage_id;sequence_id;start_x;start_y;start_width;start_height;target_x;target_y\n")
                 for i, stage in enumerate(self.scenario_stages):
                     sx, sy, sw, sh = stage["start"]
                     tx, ty = stage["target"]
-                    mx_val = sx / 22.0
-                    my_val = (HEIGHT - sy) / 22.0
-                    mw_val = sw / 22.0
-                    mh_val = sh / 22.0
-                    mtx_val = tx / 22.0
-                    mty_val = (HEIGHT - ty) / 22.0
-                    f.write(f"{i+1};1;{mx_val:.3f};{my_val:.3f};{mw_val:.3f};{mh_val:.3f};{mtx_val:.3f};{mty_val:.3f}\n")
+                    # Bounding box in meters (Y-axis inverted for Turtlesim)
+                    x_min = sx / 22.0
+                    x_max = (sx + sw) / 22.0
+                    y_min = (HEIGHT - (sy + sh)) / 22.0
+                    y_max = (HEIGHT - sy) / 22.0
+                    x_goal = tx / 22.0
+                    y_goal = (HEIGHT - ty) / 22.0
+                    f.write(f"{i+1};1;{x_min:.3f};{x_max:.3f};{y_min:.3f};{y_max:.3f};{x_goal:.3f};{y_goal:.3f}\n")
             print(f"Saved {self.filename_scenario}.csv")
         except Exception as e:
             print(f"Failed to save CSV: {e}")
